@@ -8,6 +8,9 @@
 
 #define MAX_DEV 2
 #define MAX_DATA_LEN 30
+#define BUFFER_SIZE 256
+static char message_buffer[BUFFER_SIZE];
+static size_t message_size = 0;
 
 static int mychardev_open(struct inode *inode, struct file *file);
 static int mychardev_release(struct inode *inode, struct file *file);
@@ -102,48 +105,41 @@ static long mychardev_ioctl(struct file *file, unsigned int cmd, unsigned long a
 
 static ssize_t mychardev_read(struct file *file, char __user *buf, size_t count, loff_t *offset)
 {
-    uint8_t *data = "Hello from the kernel world!\n";
-    size_t datalen = strlen(data);
+    size_t bytes_to_read;
 
-    printk("Reading device: %d\n", MINOR(file->f_path.dentry->d_inode->i_rdev));
+    printk(KERN_INFO "mychardev: Reading from device %d\n", MINOR(file->f_path.dentry->d_inode->i_rdev));
 
-    if (count > datalen) {
-        count = datalen;
+    if (*offset >= message_size) {
+        return 0;  // EOF
     }
 
-    if (copy_to_user(buf, data, count)) {
+    bytes_to_read = min(count, message_size - *offset);
+
+    if (copy_to_user(buf, message_buffer + *offset, bytes_to_read)) {
         return -EFAULT;
     }
 
-    return count;
+    *offset += bytes_to_read;
+
+    return bytes_to_read;
 }
 
 static ssize_t mychardev_write(struct file *file, const char __user *buf, size_t count, loff_t *offset)
 {
-    // size_t maxdatalen = 30, ncopied;
-    // uint8_t databuf[maxdatalen];
-    size_t maxdatalen = MAX_DATA_LEN, ncopied;
-    uint8_t databuf[MAX_DATA_LEN + 1];  // +1 for null terminator
+    size_t bytes_to_write = min(count, (size_t)(BUFFER_SIZE - 1));
 
-    printk("Writing device: %d\n", MINOR(file->f_path.dentry->d_inode->i_rdev));
+    printk(KERN_INFO "mychardev: Writing to device %d\n", MINOR(file->f_path.dentry->d_inode->i_rdev));
 
-    if (count < maxdatalen) {
-        maxdatalen = count;
+    if (copy_from_user(message_buffer, buf, bytes_to_write)) {
+        return -EFAULT;
     }
 
-    ncopied = copy_from_user(databuf, buf, maxdatalen);
+    message_buffer[bytes_to_write] = '\0';  // Null-terminate the string
+    message_size = bytes_to_write;
 
-    if (ncopied == 0) {
-        printk("Copied %zd bytes from the user\n", maxdatalen);
-    } else {
-        printk("Could't copy %zd bytes from the user\n", ncopied);
-    }
+    printk(KERN_INFO "mychardev: Wrote %zu bytes: %s\n", message_size, message_buffer);
 
-    databuf[maxdatalen] = 0;
-
-    printk("Data from the user: %s\n", databuf);
-
-    return count;
+    return bytes_to_write;
 }
 
 MODULE_LICENSE("GPL");

@@ -9,8 +9,6 @@
 #define MAX_DEV 2
 #define MAX_DATA_LEN 30
 #define BUFFER_SIZE 256
-static char message_buffer[BUFFER_SIZE];
-static size_t message_size = 0;
 
 static int mychardev_open(struct inode *inode, struct file *file);
 static int mychardev_release(struct inode *inode, struct file *file);
@@ -29,11 +27,15 @@ static const struct file_operations mychardev_fops = {
 
 struct mychar_device_data {
     struct cdev cdev;
+    char buffer[BUFFER_SIZE];
+    size_t size;
 };
 
 static int dev_major = 0;
 static struct class *mychardev_class = NULL;
-static struct mychar_device_data mychardev_data[MAX_DEV];
+// static struct mychar_device_data mychardev_data[MAX_DEV];
+static struct mychar_device_data *mychardev_data[MAX_DEV];
+
 
 static int mychardev_uevent(const struct device *dev, struct kobj_uevent_env *env)
 // static int mychardev_uevent(struct device *dev, struct kobj_uevent_env *env)
@@ -59,10 +61,16 @@ static int __init mychardev_init(void)
     mychardev_class->dev_uevent = mychardev_uevent;
 
     for (i = 0; i < MAX_DEV; i++) {
-        cdev_init(&mychardev_data[i].cdev, &mychardev_fops);
-        mychardev_data[i].cdev.owner = THIS_MODULE;
+        mychardev_data[i] = kmalloc(sizeof(struct mychar_device_data), GFP_KERNEL);
+        if (!mychardev_data[i]) {
+            // Handle error
+            printk("mychardev: Error\n");
+        }
+        cdev_init(&mychardev_data[i]->cdev, &mychardev_fops);
+        mychardev_data[i]->cdev.owner = THIS_MODULE;
+        mychardev_data[i]->size = 0;
 
-        cdev_add(&mychardev_data[i].cdev, MKDEV(dev_major, i), 1);
+        cdev_add(&mychardev_data[i]->cdev, MKDEV(dev_major, i), 1);
 
         device_create(mychardev_class, NULL, MKDEV(dev_major, i), NULL, "mychardev-%d", i);
     }
@@ -75,7 +83,10 @@ static void __exit mychardev_exit(void)
     int i;
 
     for (i = 0; i < MAX_DEV; i++) {
-        device_destroy(mychardev_class, MKDEV(dev_major, i));
+        if (mychardev_data[i]) {
+            device_destroy(mychardev_class, MKDEV(dev_major, i));
+            kfree(mychardev_data[i]);
+        }
     }
     printk("mychardev: Module exit\n");
 
@@ -87,6 +98,7 @@ static void __exit mychardev_exit(void)
 
 static int mychardev_open(struct inode *inode, struct file *file)
 {
+    file->private_data = container_of(inode->i_cdev, struct mychar_device_data, cdev);
     printk("MYCHARDEV: Device open\n");
     return 0;
 }
@@ -106,16 +118,16 @@ static long mychardev_ioctl(struct file *file, unsigned int cmd, unsigned long a
 static ssize_t mychardev_read(struct file *file, char __user *buf, size_t count, loff_t *offset)
 {
     size_t bytes_to_read;
-
+    struct mychar_device_data *dev_data = file->private_data;
     printk(KERN_INFO "mychardev: Reading from device %d\n", MINOR(file->f_path.dentry->d_inode->i_rdev));
 
-    if (*offset >= message_size) {
+    if (*offset >= dev_data->size) {
         return 0;  // EOF
     }
 
-    bytes_to_read = min(count, message_size - *offset);
+    bytes_to_read = min(count, dev_data->size - *offset);
 
-    if (copy_to_user(buf, message_buffer + *offset, bytes_to_read)) {
+    if (copy_to_user(buf, dev_data->buffer + *offset, bytes_to_read)) {
         return -EFAULT;
     }
 
@@ -127,17 +139,18 @@ static ssize_t mychardev_read(struct file *file, char __user *buf, size_t count,
 static ssize_t mychardev_write(struct file *file, const char __user *buf, size_t count, loff_t *offset)
 {
     size_t bytes_to_write = min(count, (size_t)(BUFFER_SIZE - 1));
+    struct mychar_device_data *dev_data = file->private_data;
 
     printk(KERN_INFO "mychardev: Writing to device %d\n", MINOR(file->f_path.dentry->d_inode->i_rdev));
 
-    if (copy_from_user(message_buffer, buf, bytes_to_write)) {
+    if (copy_from_user(dev_data->buffer, buf, bytes_to_write)) {
         return -EFAULT;
     }
 
-    message_buffer[bytes_to_write] = '\0';  // Null-terminate the string
-    message_size = bytes_to_write;
+    dev_data->buffer[bytes_to_write] = '\0';  // Null-terminate the string
+    dev_data->size = bytes_to_write;
 
-    printk(KERN_INFO "mychardev: Wrote %zu bytes: %s\n", message_size, message_buffer);
+    printk(KERN_INFO "mychardev: Wrote %zu bytes: %s\n", dev_data->size, dev_data->buffer);
 
     return bytes_to_write;
 }

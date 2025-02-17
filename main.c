@@ -6,7 +6,7 @@
 #include <linux/uaccess.h>
 #include <linux/fs.h>
 
-#define MAX_DEV 2
+#define MAX_DEV 3
 #define MAX_DATA_LEN 30
 #define BUFFER_SIZE 256
 
@@ -119,7 +119,9 @@ static ssize_t mychardev_read(struct file *file, char __user *buf, size_t count,
 {
     size_t bytes_to_read;
     struct mychar_device_data *dev_data = file->private_data;
-    printk(KERN_INFO "mychardev: Reading from device %d\n", MINOR(file->f_path.dentry->d_inode->i_rdev));
+    int device_id = MINOR(file->f_path.dentry->d_inode->i_rdev);
+    printk(KERN_INFO "mychardev: Reading from device %d\n", device_id);
+    printk(KERN_INFO "mychardev output for device %d: %s\n", device_id, dev_data->buffer);
 
     if (*offset >= dev_data->size) {
         return 0;  // EOF
